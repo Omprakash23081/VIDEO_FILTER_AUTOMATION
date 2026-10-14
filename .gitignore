@@ -178,3 +178,4 @@ pyrightconfig.json
 # Playwright Browser Profiles
 playwright_profile/
 browser_profile/
+downloads/

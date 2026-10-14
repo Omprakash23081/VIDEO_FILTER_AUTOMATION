@@ -1,0 +1,9 @@
+{
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "venv/": true,
+    ".venv/": true,
+    "playwright_profile/": true
+  }
+}

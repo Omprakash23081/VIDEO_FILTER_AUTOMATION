@@ -1,21 +1,21 @@
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import time
 
 import requests
 
-from config import API_URL, API_KEY
+from . import config, job_state
 
-
-import config
-import job_state
+API_URL = config.API_URL
+API_KEY = config.API_KEY
 
 print = job_state.safe_print
 
 VIDEO_FOLDER = config.VIDEO_FOLDER
 AUDIO_FOLDER = config.AUDIO_FOLDER
 
-START_PART = 30
+START_PART = 61
 MAX_RETRIES = 3
 CHUNK_SIZE = 1024 * 1024
 
@@ -58,18 +58,17 @@ def get_session():
     return _thread_state.session
 
 
-import time
-
 def download_file(url, filename, file_type, part_number=None, retries=MAX_RETRIES):
-    """Download a file with progress and retry logic."""
+    """Download a file, resuming an interrupted transfer when the CDN allows it."""
     session = get_session()
     temporary_filename = f"{filename}.part"
     part_label = f"[Downloader][PART-{part_number}] " if part_number is not None else "[Downloader] "
+    request_headers = {**_thread_state.cdn_headers, "Accept-Encoding": "identity"}
     expected_size = 0
     try:
         with session.head(
             url,
-            headers=_thread_state.cdn_headers,
+            headers=request_headers,
             timeout=30,
         ) as head_response:
             expected_size = int(head_response.headers.get("content-length", 0))
@@ -91,23 +90,87 @@ def download_file(url, filename, file_type, part_number=None, retries=MAX_RETRIE
     last_error = None
     for attempt in range(1, retries + 1):
         try:
+            downloaded_before = (
+                os.path.getsize(temporary_filename)
+                if os.path.exists(temporary_filename)
+                else 0
+            )
+            if expected_size and downloaded_before > expected_size:
+                os.remove(temporary_filename)
+                downloaded_before = 0
+            if (
+                expected_size
+                and downloaded_before == expected_size
+                and downloaded_before >= config.MIN_COMPLETE_FILE_SIZE
+            ):
+                os.replace(temporary_filename, filename)
+                print(f"{part_label}{file_type} download complete: {filename}")
+                return
+
+            if downloaded_before:
+                request_headers["Range"] = f"bytes={downloaded_before}-"
+                print(
+                    f"{part_label}Resuming {file_type} download at byte "
+                    f"{downloaded_before} (attempt {attempt}/{retries})"
+                )
+            else:
+                request_headers.pop("Range", None)
+
             with session.get(
                 url,
-                headers=_thread_state.cdn_headers,
+                headers=request_headers,
                 stream=True,
                 timeout=60,
             ) as response:
                 if response.status_code == 403:
                     raise DownloadHTTPError(403, url)
-                response.raise_for_status()
-                total_size = int(response.headers.get("content-length", 0) or 0)
-                downloaded = 0
 
-                with open(temporary_filename, "wb") as file:
+                if response.status_code == 416:
+                    content_range = response.headers.get("Content-Range", "")
+                    total_text = content_range.partition("/")[2]
+                    total_size = int(total_text) if total_text.isdigit() else 0
+                    if (
+                        total_size
+                        and downloaded_before == total_size
+                        and downloaded_before >= config.MIN_COMPLETE_FILE_SIZE
+                    ):
+                        os.replace(temporary_filename, filename)
+                        print(f"{part_label}{file_type} download complete: {filename}")
+                        return
+                    if os.path.exists(temporary_filename):
+                        os.remove(temporary_filename)
+                    if total_size:
+                        expected_size = total_size
+                    raise RuntimeError("CDN rejected the resume range; restarting download")
+
+                response.raise_for_status()
+                response_offset = downloaded_before
+                content_range = response.headers.get("Content-Range", "")
+                if response.status_code == 206:
+                    range_start_text = content_range.removeprefix("bytes ").partition("-")[0]
+                    if not range_start_text.isdigit() or int(range_start_text) != downloaded_before:
+                        if os.path.exists(temporary_filename):
+                            os.remove(temporary_filename)
+                        raise RuntimeError(
+                            f"CDN returned an invalid byte range: {content_range!r}"
+                        )
+                elif downloaded_before:
+                    # The server ignored Range; replace the partial with a full response.
+                    response_offset = 0
+
+                total_text = content_range.partition("/")[2]
+                range_total = int(total_text) if total_text.isdigit() else 0
+                content_length = int(response.headers.get("content-length", 0) or 0)
+                total_size = expected_size or range_total or (response_offset + content_length)
+                if total_size:
+                    expected_size = total_size
+
+                write_mode = "ab" if response.status_code == 206 and downloaded_before else "wb"
+                with open(temporary_filename, write_mode) as file:
                     for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
                         if chunk:
                             file.write(chunk)
-                            downloaded += len(chunk)
+                downloaded = os.path.getsize(temporary_filename)
 
             if downloaded < config.MIN_COMPLETE_FILE_SIZE:
                 raise RuntimeError(f"Downloaded {file_type} is too small: {downloaded} bytes")
@@ -119,14 +182,17 @@ def download_file(url, filename, file_type, part_number=None, retries=MAX_RETRIE
             return
 
         except DownloadHTTPError:
-            if os.path.exists(temporary_filename):
-                os.remove(temporary_filename)
             raise
         except (requests.RequestException, OSError, RuntimeError) as error:
-            if os.path.exists(temporary_filename):
-                os.remove(temporary_filename)
             last_error = error
+            partial_size = (
+                os.path.getsize(temporary_filename)
+                if os.path.exists(temporary_filename)
+                else 0
+            )
             print(f"{part_label}Attempt {attempt}/{retries} failed for {file_type}: {error}")
+            if partial_size:
+                print(f"{part_label}Keeping {partial_size} bytes to resume on retry")
             if attempt < retries:
                 backoff_time = 2 ** attempt
                 print(f"{part_label}Retrying in {backoff_time} seconds...")
@@ -204,7 +270,8 @@ def fetch_video_data(url, retries=3):
     raise ValueError(f"Failed to fetch video data after {retries} attempts: {last_error}")
 
 
-def process_part(kuaishou_url, part_number):
+def process_part(kuaishou_url, part_number, include_audio=True):
+    started_at = time.monotonic()
     video_filename = os.path.join(VIDEO_FOLDER, f"PART-{part_number}.mp4")
     audio_filename = os.path.join(AUDIO_FOLDER, f"PART-{part_number}.m4a")
 
@@ -218,29 +285,30 @@ def process_part(kuaishou_url, part_number):
         video_url = data.get("videoUrl")
         audio_url = data.get("audioUrl")
 
-        if not video_url and not audio_url:
-            print(f"[Downloader][PART-{part_number}] No media URLs received")
+        if not video_url or (include_audio and not audio_url):
+            missing_media = "video" if not video_url else "audio"
+            print(f"[Downloader][PART-{part_number}] No {missing_media} URL received")
             job_state.update_part(part_number, download="failed")
+            job_state.record_metric(
+                "download", "failed", time.monotonic() - started_at,
+                part_number, error=f"No {missing_media} URL received"
+            )
             return False
 
         success = True
-        if video_url:
-            try:
-                download_media_with_refresh(
-                    kuaishou_url,
-                    video_url,
-                    video_filename,
-                    "Video",
-                    part_number,
-                )
-            except Exception as e:
-                print(f"[Downloader][PART-{part_number}] Video download error: {e}")
-                success = False
-        else:
-            print(f"[Downloader][PART-{part_number}] No video URL received")
+        try:
+            download_media_with_refresh(
+                kuaishou_url,
+                video_url,
+                video_filename,
+                "Video",
+                part_number,
+            )
+        except Exception as error:
+            print(f"[Downloader][PART-{part_number}] Video download error: {error}")
             success = False
 
-        if audio_url:
+        if include_audio:
             try:
                 download_media_with_refresh(
                     kuaishou_url,
@@ -252,22 +320,29 @@ def process_part(kuaishou_url, part_number):
             except Exception as e:
                 print(f"[Downloader][PART-{part_number}] Audio download error: {e}")
                 success = False
-        else:
-            print(f"[Downloader][PART-{part_number}] No audio URL received")
-            success = False
 
         job_state.update_part(part_number, download="complete" if success else "failed")
+        job_state.record_metric(
+            "download", "success" if success else "failed",
+            time.monotonic() - started_at, part_number,
+            error=None if success else "audio download failed"
+        )
         return success
 
     except Exception as error:
         print(f"[Downloader][PART-{part_number}] FAILED: {error}")
         job_state.update_part(part_number, download="failed")
+        job_state.record_metric(
+            "download", "failed", time.monotonic() - started_at,
+            part_number, error=error
+        )
         return False
 
 
 def audio_is_ready(part_number):
     audio_filename = os.path.join(AUDIO_FOLDER, f"PART-{part_number}.m4a")
-    return file_is_complete(audio_filename)
+    video_filename = os.path.join(VIDEO_FOLDER, f"PART-{part_number}.mp4")
+    return file_is_complete(audio_filename) and file_is_complete(video_filename)
 
 
 def file_is_complete(filename):
@@ -277,14 +352,16 @@ def file_is_complete(filename):
     )
 
 
-def part_needs_download(part_number):
-    return not (
-        file_is_complete(os.path.join(VIDEO_FOLDER, f"PART-{part_number}.mp4"))
-        and file_is_complete(os.path.join(AUDIO_FOLDER, f"PART-{part_number}.m4a"))
+def part_needs_download(part_number, include_audio=True):
+    video_complete = file_is_complete(os.path.join(VIDEO_FOLDER, f"PART-{part_number}.mp4"))
+    audio_complete = (
+        not include_audio
+        or file_is_complete(os.path.join(AUDIO_FOLDER, f"PART-{part_number}.m4a"))
     )
+    return not (video_complete and audio_complete)
 
 
-def run(on_part_ready=None):
+def run(on_part_ready=None, include_audio=True):
     links_path = "links.txt"
     if not os.path.exists(links_path):
         print(f"CRITICAL ERROR: '{links_path}' not found. Please create it and add your URLs.")
@@ -303,12 +380,12 @@ def run(on_part_ready=None):
     pending_jobs = [
         (part_number, kuaishou_url)
         for part_number, kuaishou_url in part_jobs
-        if part_needs_download(part_number)
+        if part_needs_download(part_number, include_audio)
     ]
     complete_jobs = [
         (part_number, kuaishou_url)
         for part_number, kuaishou_url in part_jobs
-        if not part_needs_download(part_number)
+        if not part_needs_download(part_number, include_audio)
     ]
 
     print(f"Already complete: {len(complete_jobs)}")
@@ -328,7 +405,7 @@ def run(on_part_ready=None):
     failed_links = []
     with ThreadPoolExecutor(max_workers=config.DOWNLOAD_WORKERS) as executor:
         futures = {
-            executor.submit(process_part, kuaishou_url, part_number): (part_number, kuaishou_url)
+            executor.submit(process_part, kuaishou_url, part_number, include_audio): (part_number, kuaishou_url)
             for part_number, kuaishou_url in pending_jobs
         }
 
@@ -352,7 +429,7 @@ def run(on_part_ready=None):
 
         for part_number, kuaishou_url in failed_links:
             print(f"Retrying part {part_number}: {kuaishou_url}")
-            process_part(kuaishou_url, part_number)
+            process_part(kuaishou_url, part_number, include_audio)
             if on_part_ready and audio_is_ready(part_number):
                 on_part_ready(part_number)
 
@@ -369,6 +446,9 @@ if __name__ == "__main__":
     import sys
 
     try:
-        subprocess.run([sys.executable, "transcribe.py"], check=True)
+        subprocess.run(
+            [sys.executable, "-m", "youtube_automation.whisper.transcribe"],
+            check=True,
+        )
     except subprocess.CalledProcessError as e:
         print(f"Transcription pipeline failed with error code {e.returncode}")
