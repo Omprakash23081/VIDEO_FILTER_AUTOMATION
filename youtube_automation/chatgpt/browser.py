@@ -1,7 +1,7 @@
 import re
 import time
 
-from playwright.sync_api import TimeoutError
+from playwright.sync_api import Error as PlaywrightError, TimeoutError
 
 from .. import config, job_state
 
@@ -11,6 +11,34 @@ print = job_state.safe_print
 def log(message, part_number=None):
     label = f"[PART-{part_number}] " if part_number is not None else ""
     print(f"[ChatGPT] {label}{message}")
+
+
+def launch_persistent_context(playwright):
+    log(f"Starting browser profile: {config.CHATGPT_PROFILE_DIR}")
+    args = ["--disable-blink-features=AutomationControlled"]
+    if config.PLAYWRIGHT_CHROME_PROFILE:
+        args.append(f"--profile-directory={config.PLAYWRIGHT_CHROME_PROFILE}")
+    try:
+        return playwright.chromium.launch_persistent_context(
+            user_data_dir=config.CHATGPT_PROFILE_DIR,
+            headless=config.PLAYWRIGHT_HEADLESS,
+            channel="chrome",
+            args=args,
+        )
+    except PlaywrightError as error:
+        if "existing browser session" not in str(error).lower():
+            raise
+        log(
+            "Shared Chrome profile is locked by another browser window. "
+            f"Using fallback profile: {config.CHATGPT_FALLBACK_PROFILE_DIR}"
+        )
+        log("Log in to ChatGPT manually in the fallback profile once.")
+        return playwright.chromium.launch_persistent_context(
+            user_data_dir=config.CHATGPT_FALLBACK_PROFILE_DIR,
+            headless=config.PLAYWRIGHT_HEADLESS,
+            channel="chrome",
+            args=args,
+        )
 
 
 def find_chat_input(page):

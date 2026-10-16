@@ -1,0 +1,85 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Streamlit app",
+			"type": "shell",
+			"command": "cd /d h:\\YOUTUBE_VIDEO_AUTOMATION && .\\venv\\Scripts\\python.exe -m streamlit run app.py --server.headless true --server.port 8501",
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Install app dependencies",
+			"type": "shell",
+			"command": "cmd /c \"cd /d h:\\YOUTUBE_VIDEO_AUTOMATION && .\\venv\\Scripts\\python.exe -m pip install -r requirements.txt\"",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Install dependencies",
+			"type": "shell",
+			"command": "Set-Location 'h:\\YOUTUBE_VIDEO_AUTOMATION'; .\\venv\\Scripts\\python.exe -m pip install -r requirements.txt",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Validate Streamlit app imports",
+			"type": "shell",
+			"command": "Set-Location 'h:\\YOUTUBE_VIDEO_AUTOMATION'; .\\venv\\Scripts\\python.exe -c \"import app; print('APP_OK')\"",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Validate app import",
+			"type": "shell",
+			"command": "& 'h:\\YOUTUBE_VIDEO_AUTOMATION\\venv\\Scripts\\python.exe' -c \"import app; print('APP_OK')\"",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Python import check 2",
+			"type": "shell",
+			"command": "& 'h:\\YOUTUBE_VIDEO_AUTOMATION\\venv\\Scripts\\python.exe' -c 'import app; import sys; sys.stdout.write(\"APP_OK\\\\n\")'",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "App import check",
+			"type": "shell",
+			"command": "Set-Location 'h:\\YOUTUBE_VIDEO_AUTOMATION'; & 'h:\\YOUTUBE_VIDEO_AUTOMATION\\venv\\Scripts\\python.exe' -c \"import app; import sys; sys.stdout.write('APP_OK\\\\n')\"",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Validate app startup",
+			"type": "shell",
+			"command": "cmd /c \"cd /d H:\\YOUTUBE_VIDEO_AUTOMATION && H:\\YOUTUBE_VIDEO_AUTOMATION\\venv\\Scripts\\python.exe -c \\\"import app; print('APP_OK')\\\"\"",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Import validation",
+			"type": "shell",
+			"command": "Set-Location 'H:\\YOUTUBE_VIDEO_AUTOMATION'; & 'H:\\YOUTUBE_VIDEO_AUTOMATION\\venv\\Scripts\\python.exe' -c 'import app; print(\"APP_OK\")'",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "App import check after fix",
+			"type": "shell",
+			"command": "Set-Location 'H:\\YOUTUBE_VIDEO_AUTOMATION'; & 'H:\\YOUTUBE_VIDEO_AUTOMATION\\venv\\Scripts\\python.exe' -c \"import app; print('APP_OK')\"",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

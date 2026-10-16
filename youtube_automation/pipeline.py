@@ -1,6 +1,7 @@
+import argparse
+import os
 import queue
 import threading
-import os
 import time
 
 from . import config, downloader, job_state
@@ -87,8 +88,16 @@ def _run_pipeline(mode):
     print("=" * 50)
 
 
-def main():
-    mode = choose_pipeline_mode()
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Run the Kuaishou processing pipeline.")
+    parser.add_argument(
+        "--mode",
+        type=int,
+        choices=(1, 2, 3, 4),
+        help="Processing mode (1-4). If omitted, prompt for a mode.",
+    )
+    args = parser.parse_args(argv)
+    mode = args.mode if args.mode is not None else choose_pipeline_mode()
     started_at = time.monotonic()
     item_count = None
     try:

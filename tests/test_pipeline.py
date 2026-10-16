@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from contextlib import nullcontext
 from unittest.mock import MagicMock, Mock, patch
 
 from youtube_automation import downloader, pipeline
@@ -8,6 +9,25 @@ import requests
 
 
 class PipelineModeTests(unittest.TestCase):
+    def test_main_uses_requested_mode_without_prompting(self):
+        with (
+            patch.object(pipeline, "_run_pipeline") as run_pipeline,
+            patch.object(
+                pipeline,
+                "choose_pipeline_mode",
+                side_effect=AssertionError("interactive prompt should not run"),
+            ),
+            patch.object(
+                pipeline.job_state,
+                "pipeline_lock",
+                return_value=nullcontext(),
+            ),
+            patch.object(pipeline.job_state, "record_metric"),
+        ):
+            pipeline.main(["--mode", "2"])
+
+        run_pipeline.assert_called_once_with(2)
+
     def test_choose_pipeline_mode_reprompts_for_invalid_choice(self):
         choices = iter(["5", "3"])
 

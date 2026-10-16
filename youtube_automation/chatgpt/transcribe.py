@@ -2,7 +2,7 @@ import os
 import re
 import time
 
-from playwright.sync_api import Error as PlaywrightError, sync_playwright
+from playwright.sync_api import sync_playwright
 
 from .. import config, job_state
 from . import browser, transcript as text
@@ -115,31 +115,7 @@ def run(transcript_paths=None):
     fixed_transcript_paths = transcript_paths
 
     with sync_playwright() as playwright:
-        log(f"Starting browser profile: {config.CHATGPT_PROFILE_DIR}")
-        args = ["--disable-blink-features=AutomationControlled"]
-        if config.PLAYWRIGHT_CHROME_PROFILE:
-            args.append(f"--profile-directory={config.PLAYWRIGHT_CHROME_PROFILE}")
-        try:
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=config.CHATGPT_PROFILE_DIR,
-                headless=config.PLAYWRIGHT_HEADLESS,
-                channel="chrome",
-                args=args,
-            )
-        except PlaywrightError as error:
-            if "existing browser session" not in str(error).lower():
-                raise
-            log(
-                "Shared Chrome profile is locked by another browser window. "
-                f"Using fallback profile: {config.CHATGPT_FALLBACK_PROFILE_DIR}"
-            )
-            log("Log in to ChatGPT manually in the fallback profile once.")
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=config.CHATGPT_FALLBACK_PROFILE_DIR,
-                headless=config.PLAYWRIGHT_HEADLESS,
-                channel="chrome",
-                args=args,
-            )
+        context = browser.launch_persistent_context(playwright)
         try:
             log("Browser started")
             page = context.new_page()
